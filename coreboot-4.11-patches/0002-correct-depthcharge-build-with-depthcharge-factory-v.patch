@@ -1,0 +1,26 @@
+From 5b9e3194f1e19a0d2c65ad45d1b023809f0fda4b Mon Sep 17 00:00:00 2001
+From: Hal Emmerich <hal@halemmerich.com>
+Date: Mon, 20 Jan 2020 23:24:08 -0600
+Subject: [PATCH 2/2] correct depthcharge build with depthcharge
+ factory-veyron-6591.B
+
+---
+ payloads/external/depthcharge/Makefile | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/payloads/external/depthcharge/Makefile b/payloads/external/depthcharge/Makefile
+index ceab19ef55..95fe8442cf 100644
+--- a/payloads/external/depthcharge/Makefile
++++ b/payloads/external/depthcharge/Makefile
+@@ -83,7 +83,7 @@ config: $(project_dir)/.version_$(TAG-y) $(libpayload_install_dir)
+ 
+ build: config
+ 	echo "    MAKE       $(project_name) $(TAG-y)"
+-	$(MAKE) -C $(project_dir) BOARD=$(BOARD) \
++	$(MAKE) -C $(project_dir)  V=1 -d depthcharge_unified BOARD=$(BOARD) \
+ 		LIBPAYLOAD_DIR=$(libpayload_install_dir)/libpayload \
+ 		VB_SOURCE=$(VBOOT_SOURCE) \
+ 		PATH="$(abspath ../../../build/util/cbfstool):$$PATH"
+-- 
+2.20.1
+

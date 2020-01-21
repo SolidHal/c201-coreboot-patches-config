@@ -1,0 +1,182 @@
+From a4cd932ca565b8a2a0ecc3ae8abf9ac4f958bd55 Mon Sep 17 00:00:00 2001
+From: Hal Emmerich <hal@halemmerich.com>
+Date: Mon, 20 Jan 2020 23:22:34 -0600
+Subject: [PATCH] make depthcharge start to build with coreboot 4.11
+
+---
+ Makefile                 | 64 ++++++++++++++++++++++++----------------
+ src/arch/arm/build_vars  |  2 +-
+ src/drivers/ec/cros/ec.c |  2 +-
+ 3 files changed, 41 insertions(+), 27 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index 9fab4c02..1a13b249 100644
+--- a/Makefile
++++ b/Makefile
+@@ -14,33 +14,43 @@
+ ## MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ ## GNU General Public License for more details.
+ ##
+-## You should have received a copy of the GNU General Public License
+-## along with this program; if not, write to the Free Software
+-## Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301 USA
+-##
+ 
+ .SECONDEXPANSION:
+ 
+-export src ?= $(shell pwd)
++src ?= $(shell pwd)
++export override src := $(abspath $(src))
++
++obj ?= $(src)/build
++export override obj := $(abspath $(obj))
++
+ export srck ?= $(src)/util/kconfig
+-export obj ?= $(src)/build
+ export objk ?= $(obj)/util/kconfig
+ 
+ export KERNELVERSION      := 0.1.0
++
+ export KCONFIG_AUTOHEADER := $(obj)/config.h
+ export KCONFIG_AUTOCONFIG := $(obj)/auto.conf
++export KCONFIG_DEPENDENCIES := $(obj)/auto.conf.cmd
++export KCONFIG_SPLITCONFIG := $(obj)/config
++export KCONFIG_TRISTATE := $(obj)/tristate.conf
++export KCONFIG_NEGATIVES := 1
++export KCONFIG_STRICT := 1
++DOTCONFIG ?= .config
++export KCONFIG_CONFIG = $(DOTCONFIG)
++
+ 
+ CONFIG_SHELL := sh
+ ifdef BOARD
+ KBUILD_DEFCONFIG := $(src)/board/$(BOARD)/defconfig
+ endif
+ UNAME_RELEASE := $(shell uname -r)
+-HAVE_DOTCONFIG := $(wildcard .config)
++HAVE_DOTCONFIG := $(wildcard $(DOTCONFIG))
+ MAKEFLAGS += -rR --no-print-directory
+ 
+ # Make is silent per default, but 'make V=1' will show all compiler calls.
+ ifneq ($(V),1)
+-Q := @
++Q:=@
++.SILENT:
+ endif
+ 
+ HOSTCC = gcc
+@@ -48,24 +58,17 @@ HOSTCXX = g++
+ HOSTCFLAGS := -I$(srck) -I$(objk)
+ HOSTCXXFLAGS := -I$(srck) -I$(objk)
+ 
+-ifdef LIBPAYLOAD_DIR
+-include $(LIBPAYLOAD_DIR)/libpayload.xcompile
+-endif
+-LIBPAYLOAD_DIR ?= ../libpayload/install/libpayload
+-LZMA := lzma
+-
+-LDSCRIPT := $(src)/src/image/depthcharge.ldscript
+-
+-
+-
+-
+ ifeq ($(strip $(HAVE_DOTCONFIG)),)
+ 
+ all: help
+ 
+ else
+ 
+-include $(src)/.config
++LIBPAYLOAD_DIR ?= ../libpayload/install/libpayload
++
++include $(DOTCONFIG)
++include $(LIBPAYLOAD_DIR)/libpayload.config
++include $(LIBPAYLOAD_DIR)/libpayload.xcompile
+ 
+ ifeq ($(CONFIG_ARCH_X86),y)
+ ARCH = x86
+@@ -86,8 +89,16 @@ ARCH_TO_TOOLCHAIN_arm64  := arm64
+ 
+ toolchain := $(ARCH_TO_TOOLCHAIN_$(ARCH))
+ 
++# libpayload's xcompile adapted the coreboot naming scheme, which is different
++# in some places. If the names above don't work, use another set.
++ifeq ($(CC_$(toolchain)),)
++new_toolchain_name_i386 := x86_32
++
++toolchain := $(new_toolchain_name_$(toolchain))
++endif
++
+ CC:=$(firstword $(CC_$(toolchain)))
+-XCC := CC=$(CC) $(LIBPAYLOAD_DIR)/bin/lpgcc
++XCC := CC=$(CC) $(abspath $(LIBPAYLOAD_DIR))/bin/lpgcc
+ AS = $(LIBPAYLOAD_DIR)/bin/lpas
+ OBJCOPY ?= $(OBJCOPY_$(toolchain))
+ STRIP ?= $(STRIP_$(toolchain))
+@@ -95,7 +106,9 @@ STRIP ?= $(STRIP_$(toolchain))
+ include $(src)/src/arch/$(ARCH_DIR)/build_vars
+ 
+ INCLUDES = -I$(obj) -I$(src)/src/ -I$(src)/src/arch/$(ARCH_DIR)/includes/ \
+-	-I$(VB_SOURCE)/firmware/include
++	-I$(VB_SOURCE)/firmware/include \
++	-include $(LIBPAYLOAD_DIR)/include/kconfig.h \
++	-include $(KCONFIG_AUTOHEADER)
+ ABI_FLAGS := $(ARCH_ABI_FLAGS) -ffreestanding -fno-builtin \
+ 	-fno-stack-protector -fomit-frame-pointer
+ LINK_FLAGS = $(ARCH_LINK_FLAGS) $(ABI_FLAGS) -fuse-ld=bfd \
+@@ -127,7 +140,8 @@ all:
+ 
+ endif
+ 
+-
++$(KCONFIG_AUTOHEADER): $(KCONFIG_CONFIG)
++	$(MAKE) oldconfig
+ 
+ strip_quotes = $(subst ",,$(subst \",,$(1)))
+ 
+@@ -193,7 +207,7 @@ printall:
+ 	@$(foreach class,$(special-classes),echo $(class):='$($(class))'; )
+ 
+ ifndef NOMKDIR
+-$(shell mkdir -p $(obj) $(objk)/lxdialog $(additional-dirs) $(alldirs))
++$(shell mkdir -p $(obj) $(KCONFIG_SPLITCONFIG) $(objk)/lxdialog $(additional-dirs) $(alldirs))
+ endif
+ 
+ # macro to define template macros that are used by use_template macro
+@@ -204,7 +218,7 @@ define create_cc_template
+ # $4 additional dependencies
+ ifn$(EMPTY)def $(1)-objs_$(2)_template
+ de$(EMPTY)fine $(1)-objs_$(2)_template
+-$(obj)/$$(1).$(1).o: src/$$(1).$(2) $(obj)/config.h $(4)
++$(obj)/$$(1).$(1).o: src/$$(1).$(2) $(KCONFIG_AUTOHEADER) $(4)
+ 	@printf "    CC         $$$$(subst $$$$(obj)/,,$$$$(@))\n"
+ 	$(Q)$(XCC) $(3) -MMD $$$$(CFLAGS) -c -o $$$$@ $$$$<
+ en$(EMPTY)def
+diff --git a/src/arch/arm/build_vars b/src/arch/arm/build_vars
+index 77ad89ef..35b635e6 100644
+--- a/src/arch/arm/build_vars
++++ b/src/arch/arm/build_vars
+@@ -17,6 +17,6 @@
+ 
+ VB_FIRMWARE_ARCH=arm
+ ifeq ($(CONFIG_ARCH_ARM_V7),y)
+-ARCH_ABI_FLAGS += -mthumb
++ARCH_ABI_FLAGS += -mthumb -march=armv7-a
+ endif
+ ARCH_LINK_FLAGS :=
+diff --git a/src/drivers/ec/cros/ec.c b/src/drivers/ec/cros/ec.c
+index 546ad25e..b1434762 100644
+--- a/src/drivers/ec/cros/ec.c
++++ b/src/drivers/ec/cros/ec.c
+@@ -74,7 +74,7 @@ static const int CROS_EC_HASH_TIMEOUT_MS = 2000;
+ static const int CROS_EC_HASH_CHECK_DELAY_MS = 10;
+ 
+ /* Note: depends on enum ec_current_image */
+-static const char * const ec_current_image_name[] = {"unknown", "RO", "RW"};
++/* static const char * const ec_current_image_name[] = {"unknown", "RO", "RW"}; */
+ 
+ void cros_ec_dump_data(const char *name, int cmd, const void *data, int len)
+ {
+-- 
+2.20.1
+
